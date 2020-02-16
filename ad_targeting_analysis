@@ -1,0 +1,167 @@
+## Author: Varsha Ramesh Kodekoppa 
+## Subject: Data Analytics & Machine Learning 
+## Semester: Spring 2019 
+
+library(stringr)
+library(ggplot2)
+library(party)
+library(ggpubr)
+setwd("C:/Users/TempAdmin2/Documents/Data Science/R Scripts/Random")
+####Loading the data into R and looking at the structure
+app_df <- read.csv('Ad_Targeting_Data.csv', stringsAsFactors = FALSE, header = TRUE)
+colnames(app_df)
+
+
+#### Cleaning the dataset #####
+# Dropping  columns
+app_df <- app_df[, !names(app_df) %in% c('user', 'first_open', 'enrolled_date', 'X', 'screen_list')]
+# Dropping row with missing values
+app_df <- na.omit(app_df)
+# enrolling hour column into int
+app_df$hour <- as.numeric(str_split_fixed(app_df$hour, ":", 2)[,1])
+
+# Categorical features: hour, dayofweek, minigame, used_premium_feature, liked
+app_df$hour <- factor(app_df$hour)
+app_df$dayofweek <- factor(app_df$dayofweek)
+app_df$minigame <- factor(app_df$minigame)
+app_df$used_premium_feature <- factor(app_df$used_premium_feature)
+app_df$liked <- factor(app_df$liked)
+
+#Plotting categorical features
+ggplot(app_df[which(app_df$enrolled == 1),], aes(liked)) +
+  geom_bar(fill = "#0073C2FF") +
+  ylim(0, 30000) +
+  theme_pubclean() +
+  ggtitle("Used Premium Feature (Enrolled)") +
+  theme(plot.title = element_text(hjust = 0.5))
+
+ggplot(app_df[which(app_df$enrolled == 0),], aes(liked)) +
+  geom_bar(fill = "#8B0000") +
+  ylim(0, 30000) +
+  theme_pubclean() +
+  ggtitle("Used Premium Feature (Not Enrolled)") +
+  theme(plot.title = element_text(hjust = 0.5))
+
+#Plotting target variable
+ggplot(app_df, aes(enrolled)) +
+  geom_bar(fill = "#41f4a3") +
+  ylim(0, 50000) +
+  theme_pubclean() +
+  ggtitle("Enrollment Frequency") +
+  theme(plot.title = element_text(hjust = 0.5))
+
+
+# Continous features: age, numscreens
+# Label: enrolled
+app_df$enrolled <- factor(app_df$enrolled)
+
+# Looking at the summary statistics for all continuos variables
+summary(app_df[, c("age", "numscreens")])
+
+
+# Plot continuos features 
+ggplot(app_df, aes(age, fill=factor(enrolled))) + 
+  geom_histogram(binwidth=1, alpha=.3, position="identity") +
+  labs(shape = "Enrolled") +
+  theme_pubclean() +
+  ggtitle("Numscreen by Enrollers/Non-enrollers") +
+  theme(plot.title = element_text(hjust = 0.5))
+
+ggplot(app_df, aes(numscreens, fill=factor(enrolled))) + 
+  geom_histogram(binwidth=1, alpha=.5, position="identity") +
+  labs(shape = "Enrolled") +
+  theme_pubclean() +
+  ggtitle("Numscreen by Enrollers/Non-enrollers") +
+  theme(plot.title = element_text(hjust = 0.5))
+
+# Create train and test split
+set.seed(123)
+smp_size <- floor(0.75 * nrow(app_df))
+train_ind <- sample(seq_len(nrow(app_df)), size = smp_size)
+train <- app_df[train_ind, ]
+test <- app_df[-train_ind, ]
+
+# Train a logistic regresser
+logit_model <- glm(enrolled ~., family=binomial(link='logit'), data=train)
+logit_preds <- predict(logit_model, newdata=test[, !names(test) %in% "enrolled"],type='response')
+
+summary(logit_model)
+
+# Train a decision tree
+ctree_model <- ctree(enrolled ~ ., data = train) 
+summary(ctree_model)
+
+# Test the model
+logit_preds <- predict(logit_model, newdata=test[, !names(test) %in% "enrolled"],type='response')
+print('Logistic Regression predictions are prob of enrollment')
+print(logit_preds[1:10])
+ctree_preds <- predict(ctree_model, newdata=test[, !names(test) %in% "enrolled"],type='response')
+print('Decision tree predictions are enrollment')
+print(ctree_preds[1:10])
+
+logit_predictions <- ifelse(logit_preds > 0.5, 1,0)
+logit_confMatrix <- table(logit_predictions, test$enrolled)
+logit_targeted <- logit_confMatrix[2] + logit_confMatrix[4]
+logit_precision <- logit_confMatrix[4]/ logit_targeted
+print('logit_precision (cutoff = 0.5)')
+print(logit_precision)
+
+ctree_confMatrix <- table(ctree_preds, test$enrolled)
+ctree_targeted <- ctree_confMatrix[2] + ctree_confMatrix[4]
+ctree_precision <- ctree_confMatrix[4]/ ctree_targeted
+print('ctree_precision')
+print(ctree_precision)
+
+# Logistic regression gives you a probability between 0 and 1 for each test user. To decide which test users
+# will enroll we can say user with probability > X% will enroll and probability <= X% wont.
+# This is called a decision cutoff. We can try different cutoffs and measure precision for each.
+# Precision here is calculated for each decision cutoff
+# Precision = Number of user actually enrolled / Total number of users the model said will enroll
+# In other words, if we show the ad to all the users the model said will enroll how many actually enrolls
+# This precision(=business KPI in the proposal) is calculated for each cutoff.
+
+confMatrix <- vector("list", 8)
+Precision <- vector("list", 8)
+totalTargeted <- vector("list", 8)
+
+
+for (i in c(2:9)){
+  predictions <- ifelse(logit_preds > i/10,1,0)
+  confMatrix[[i]] <- table(predictions, test$enrolled)
+  totalTargeted[[i]] <- confMatrix[[i]][2] + confMatrix[[i]][4]
+  Precision[[i]] <- confMatrix[[i]][4]/ totalTargeted[[i]]
+}
+
+# You will precision improves as we increase the cutoff. This is obvious as we only show the ad to users for 
+# whom the model has higher probability of enrollment. But this improvement in precision comes at a cost that
+# we can only show an ad to a small number of users. On the flipside, we can decrease the ad $ spent for higher
+# enrollment rate but with small user size. The following graph plots at different cutoff total users the model says
+# we should show an ad to and precision of that cohort.
+
+totalTargeted <- unlist(totalTargeted, use.names = FALSE)
+Precision <- unlist(Precision, use.names = FALSE)
+cutoffs <- c(2:9)/10
+
+plotData <- data.frame(totalTargeted, Precision, cutoffs)
+
+p <- ggplot(plotData, aes(x = cutoffs))
+p <- p + geom_line(aes(y = Precision, colour = "Precision")) + 
+  geom_point(aes(y = Precision, colour = "Precision"))
+
+# adding the relative humidity data, transformed to match roughly the range of the temperature
+p <- p + geom_line(aes(y = totalTargeted/20000, colour = "# Ad shown")) + 
+  geom_point(aes(y = totalTargeted/20000, colour = "# Ad shown"))
+
+# now adding the secondary axis, following the example in the help file ?scale_y_continuous
+# and, very important, reverting the above transformation
+p <- p + scale_y_continuous(sec.axis = sec_axis(~.*15000, name = "# Ad shown"))
+p <- p + geom_hline(aes(yintercept=0.62, color="baseline"), show.legend = TRUE, linetype="dashed")
+# modifying colours and theme options
+p <- p + scale_colour_manual(values = c("blue", "red", "black"))
+p <- p + labs(y = "Precision",
+              x = "Logistic Probability Cut-off",
+              colour = "Legend")
+p <- p + theme_pubclean() 
+p <- p + ggtitle("Precision and Ads shown per Decision Cut-off") 
+p <- p + theme(legend.position = c(0.3, 0.3),  plot.title = element_text(hjust = 0.5))
+p
